@@ -53,6 +53,7 @@ class LoFGAN(nn.Module):
             loss_adv_dis_real = loss_adv_dis_real * self.w_adv_d
             loss_adv_dis_real.backward(retain_graph=True)
 
+            # classification gradient regularization loss???
             y_extend = y.repeat(1, self.n_sample).view(-1)
             index = torch.LongTensor(range(y_extend.size(0))).cuda()
             logit_c_real_forgp = logit_c_real[index, y_extend].unsqueeze(1)
@@ -145,8 +146,8 @@ class Discriminator(nn.Module):
             B, C, H, W = x.size()
             K = 1
         feat = self.cnn_f(x)
-        logit_adv = self.cnn_adv(feat).view(B * K, -1)
-        logit_c = self.cnn_c(feat).view(B * K, -1)
+        logit_adv = self.cnn_adv(feat).view(B * K, -1) # discrimination: Real to real, fake to fake
+        logit_c = self.cnn_c(feat).view(B * K, -1) # classification: Making the generated image to have the consistent label
         return feat, logit_adv, logit_c
 
 

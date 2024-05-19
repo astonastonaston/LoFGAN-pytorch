@@ -31,7 +31,7 @@ max_iter = config['max_iter']
 train_dataloader, test_dataloader = get_loaders(config)
 
 if __name__ == '__main__':
-
+    print("Main function starting")
     SEED = 0
     random.seed(SEED)
     np.random.seed(SEED)
@@ -43,12 +43,13 @@ if __name__ == '__main__':
     trainer = Trainer(config)
     trainer.cuda()
 
-    imgs_test, _ = iter(test_dataloader).next()
+    imgs_test, _ = next(iter(test_dataloader))
     iterations = trainer.resume(checkpoint_directory) if args.resume else 0
     while True:
         with torch.autograd.set_detect_anomaly(True):
 
             for it, (imgs, label) in enumerate(train_dataloader):
+                print(f"Iteration {it}, with sizes of image and label {imgs.shape}, {label.shape}")
                 trainer.update_lr(iterations, max_iter)
                 imgs = imgs.cuda()
                 label = label.cuda()
