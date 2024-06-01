@@ -157,7 +157,7 @@ class Generator(nn.Module):
 #         self.decoder = Decoder()
         self.encoder = SmallerEncoder()
         self.decoder = SmallerDecoder()
-        self.fusion = LocalFusionModule(inplanes=64, rate=config['rate'])
+        self.fusion = LocalFusionModule(inplanes=32, rate=config['rate'])
 
     def forward(self, xs):
         b, k, C, H, W = xs.size()
@@ -245,60 +245,49 @@ class Decoder(nn.Module):
         return self.model(x)
 
 
-
 class SmallerEncoder(nn.Module):
     def __init__(self):
         super(SmallerEncoder, self).__init__()
 
-        model = [Conv2dBlock(3, 16, 5, 1, 2,
-                             norm='bn',
-                             activation='lrelu',
-                             pad_type='reflect'),
-                 Conv2dBlock(16, 32, 3, 2, 1,
-                             norm='bn',
-                             activation='lrelu',
-                             pad_type='reflect'),
-                 Conv2dBlock(32, 64, 3, 2, 1,
-                             norm='bn',
-                             activation='lrelu',
-                             pad_type='reflect'),
-                 Conv2dBlock(64, 64, 3, 2, 1,
-                             norm='bn',
-                             activation='lrelu',
-                             pad_type='reflect')
-                 ]
-        self.model = nn.Sequential(*model)
+        self.layer1 = Conv2dBlock(3, 8, 5, 1, 2, norm='bn', activation='lrelu', pad_type='reflect')
+        self.layer2 = Conv2dBlock(8, 16, 3, 2, 1, norm='bn', activation='lrelu', pad_type='reflect')
+        self.layer3 = Conv2dBlock(16, 32, 3, 2, 1, norm='bn', activation='lrelu', pad_type='reflect')
+        self.layer4 = Conv2dBlock(32, 32, 3, 2, 1, norm='bn', activation='lrelu', pad_type='reflect')
 
     def forward(self, x):
-        return self.model(x)
-
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+        return x
+    
 class SmallerDecoder(nn.Module):
     def __init__(self):
         super(SmallerDecoder, self).__init__()
 
-        model = [nn.Upsample(scale_factor=2),
-                 Conv2dBlock(64, 64, 3, 1, 1,
-                             norm='bn',
-                             activation='lrelu',
-                             pad_type='reflect'),
-                 nn.Upsample(scale_factor=2),
-                 Conv2dBlock(64, 32, 3, 1, 1,
-                             norm='bn',
-                             activation='lrelu',
-                             pad_type='reflect'),
-                 nn.Upsample(scale_factor=2),
-                 Conv2dBlock(32, 16, 3, 1, 1,
-                             norm='bn',
-                             activation='lrelu',
-                             pad_type='reflect'),
-                 Conv2dBlock(16, 3, 5, 1, 2,
-                             norm='none',
-                             activation='tanh',
-                             pad_type='reflect')]
-        self.model = nn.Sequential(*model)
+        self.upsample1 = nn.Upsample(scale_factor=2)
+        self.conv1 = Conv2dBlock(32, 32, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect')
+        
+        self.upsample2 = nn.Upsample(scale_factor=2)
+        self.conv2 = Conv2dBlock(32, 16, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect')
+        
+        self.upsample3 = nn.Upsample(scale_factor=2)
+        self.conv3 = Conv2dBlock(16, 8, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect')
+        
+        self.conv4 = Conv2dBlock(8, 3, 5, 1, 2, norm='none', activation='tanh', pad_type='reflect')
 
     def forward(self, x):
-        return self.model(x)
+        x = self.upsample1(x)
+        x = self.conv1(x)
+        
+        x = self.upsample2(x)
+        x = self.conv2(x)
+        
+        x = self.upsample3(x)
+        x = self.conv3(x)
+        
+        x = self.conv4(x)
+        return x
 
 
 
