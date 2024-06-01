@@ -49,7 +49,7 @@ if __name__ == '__main__':
         with torch.autograd.set_detect_anomaly(True):
 
             for it, (imgs, label) in enumerate(train_dataloader):
-                print(f"Iteration {it}, with sizes of image and label {imgs.shape}, {label.shape}")
+                # print(f"Iteration {it}, with sizes of image and label {imgs.shape}, {label.shape}")
                 trainer.update_lr(iterations, max_iter)
                 imgs = imgs.cuda()
                 label = label.cuda()
