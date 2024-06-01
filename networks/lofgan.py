@@ -53,7 +53,6 @@ class LoFGAN(nn.Module):
             loss_adv_dis_real = loss_adv_dis_real * self.w_adv_d
             loss_adv_dis_real.backward(retain_graph=True)
 
-            # classification gradient regularization loss???
             y_extend = y.repeat(1, self.n_sample).view(-1)
             index = torch.LongTensor(range(y_extend.size(0))).cuda()
             logit_c_real_forgp = logit_c_real[index, y_extend].unsqueeze(1)
@@ -146,17 +145,19 @@ class Discriminator(nn.Module):
             B, C, H, W = x.size()
             K = 1
         feat = self.cnn_f(x)
-        logit_adv = self.cnn_adv(feat).view(B * K, -1) # discrimination: Real to real, fake to fake
-        logit_c = self.cnn_c(feat).view(B * K, -1) # classification: Making the generated image to have the consistent label
+        logit_adv = self.cnn_adv(feat).view(B * K, -1)
+        logit_c = self.cnn_c(feat).view(B * K, -1)
         return feat, logit_adv, logit_c
 
 
 class Generator(nn.Module):
     def __init__(self, config):
         super(Generator, self).__init__()
-        self.encoder = Encoder()
-        self.decoder = Decoder()
-        self.fusion = LocalFusionModule(inplanes=128, rate=config['rate'])
+#         self.encoder = Encoder()
+#         self.decoder = Decoder()
+        self.encoder = SmallerEncoder()
+        self.decoder = SmallerDecoder()
+        self.fusion = LocalFusionModule(inplanes=64, rate=config['rate'])
 
     def forward(self, xs):
         b, k, C, H, W = xs.size()
@@ -242,6 +243,63 @@ class Decoder(nn.Module):
 
     def forward(self, x):
         return self.model(x)
+
+
+
+class SmallerEncoder(nn.Module):
+    def __init__(self):
+        super(SmallerEncoder, self).__init__()
+
+        model = [Conv2dBlock(3, 16, 5, 1, 2,
+                             norm='bn',
+                             activation='lrelu',
+                             pad_type='reflect'),
+                 Conv2dBlock(16, 32, 3, 2, 1,
+                             norm='bn',
+                             activation='lrelu',
+                             pad_type='reflect'),
+                 Conv2dBlock(32, 64, 3, 2, 1,
+                             norm='bn',
+                             activation='lrelu',
+                             pad_type='reflect'),
+                 Conv2dBlock(64, 64, 3, 2, 1,
+                             norm='bn',
+                             activation='lrelu',
+                             pad_type='reflect')
+                 ]
+        self.model = nn.Sequential(*model)
+
+    def forward(self, x):
+        return self.model(x)
+
+class SmallerDecoder(nn.Module):
+    def __init__(self):
+        super(SmallerDecoder, self).__init__()
+
+        model = [nn.Upsample(scale_factor=2),
+                 Conv2dBlock(64, 64, 3, 1, 1,
+                             norm='bn',
+                             activation='lrelu',
+                             pad_type='reflect'),
+                 nn.Upsample(scale_factor=2),
+                 Conv2dBlock(64, 32, 3, 1, 1,
+                             norm='bn',
+                             activation='lrelu',
+                             pad_type='reflect'),
+                 nn.Upsample(scale_factor=2),
+                 Conv2dBlock(32, 16, 3, 1, 1,
+                             norm='bn',
+                             activation='lrelu',
+                             pad_type='reflect'),
+                 Conv2dBlock(16, 3, 5, 1, 2,
+                             norm='none',
+                             activation='tanh',
+                             pad_type='reflect')]
+        self.model = nn.Sequential(*model)
+
+    def forward(self, x):
+        return self.model(x)
+
 
 
 class LocalFusionModule(nn.Module):
