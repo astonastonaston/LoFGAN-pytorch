@@ -252,29 +252,34 @@ class SmallerEncoder(nn.Module):
         self.layer1 = Conv2dBlock(3, 8, 5, 1, 2, norm='bn', activation='lrelu', pad_type='reflect')
         self.layer2 = Conv2dBlock(8, 16, 3, 2, 1, norm='bn', activation='lrelu', pad_type='reflect')
         self.layer3 = Conv2dBlock(16, 32, 3, 2, 1, norm='bn', activation='lrelu', pad_type='reflect')
-        self.layer4 = Conv2dBlock(32, 32, 3, 2, 1, norm='bn', activation='lrelu', pad_type='reflect')
+        self.layer4 = Conv2dBlock(32, 64, 3, 2, 1, norm='bn', activation='lrelu', pad_type='reflect')
+        self.layer5 = Conv2dBlock(64, 64, 3, 2, 1, norm='bn', activation='lrelu', pad_type='reflect')
 
     def forward(self, x):
         x = self.layer1(x)
         x = self.layer2(x)
         x = self.layer3(x)
         x = self.layer4(x)
+        x = self.layer5(x)
         return x
-    
+
 class SmallerDecoder(nn.Module):
     def __init__(self):
         super(SmallerDecoder, self).__init__()
 
         self.upsample1 = nn.Upsample(scale_factor=2)
-        self.conv1 = Conv2dBlock(32, 32, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect')
+        self.conv1 = Conv2dBlock(64, 64, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect')
         
         self.upsample2 = nn.Upsample(scale_factor=2)
-        self.conv2 = Conv2dBlock(32, 16, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect')
+        self.conv2 = Conv2dBlock(64, 32, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect')
         
         self.upsample3 = nn.Upsample(scale_factor=2)
-        self.conv3 = Conv2dBlock(16, 8, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect')
+        self.conv3 = Conv2dBlock(32, 16, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect')
         
-        self.conv4 = Conv2dBlock(8, 3, 5, 1, 2, norm='none', activation='tanh', pad_type='reflect')
+        self.upsample4 = nn.Upsample(scale_factor=2)
+        self.conv4 = Conv2dBlock(16, 8, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect')
+        
+        self.conv5 = Conv2dBlock(8, 3, 5, 1, 2, norm='none', activation='tanh', pad_type='reflect')
 
     def forward(self, x):
         x = self.upsample1(x)
@@ -286,7 +291,10 @@ class SmallerDecoder(nn.Module):
         x = self.upsample3(x)
         x = self.conv3(x)
         
+        x = self.upsample4(x)
         x = self.conv4(x)
+        
+        x = self.conv5(x)
         return x
 
 

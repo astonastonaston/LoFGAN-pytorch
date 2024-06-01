@@ -6,7 +6,6 @@ import argparse
 import torch
 import time
 import numpy as np
-from tqdm import tqdm
 from tensorboardX import SummaryWriter
 
 from trainer import Trainer
@@ -49,7 +48,7 @@ if __name__ == '__main__':
     while True:
         with torch.autograd.set_detect_anomaly(True):
 
-            for it, (imgs, label) in tqdm(enumerate(train_dataloader)):
+            for it, (imgs, label) in enumerate(train_dataloader):
                 print(f"Iteration {it}, with sizes of image and label {imgs.shape}, {label.shape}")
                 trainer.update_lr(iterations, max_iter)
                 imgs = imgs.cuda()
