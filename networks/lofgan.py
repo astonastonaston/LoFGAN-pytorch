@@ -153,10 +153,14 @@ class Discriminator(nn.Module):
 class Generator(nn.Module):
     def __init__(self, config):
         super(Generator, self).__init__()
-#         self.encoder = Encoder()
-#         self.decoder = Decoder()
-        self.encoder = SmallerEncoder()
-        self.decoder = SmallerDecoder()
+        self.encoder = Encoder()
+        self.decoder = Decoder()
+        # self.encoder = SmallerEncoder()
+        # self.decoder = SmallerDecoder()
+#         self.encoder = EvenSmallerEncoder()
+#         self.decoder = EvenSmallerDecoder()
+#         self.encoder = EvenMuchSmallerEncoder()
+#         self.decoder = EvenMuchSmallerDecoder()
         self.fusion = LocalFusionModule(inplanes=32, rate=config['rate'])
 
     def forward(self, xs):
@@ -296,6 +300,77 @@ class SmallerDecoder(nn.Module):
         
         x = self.conv5(x)
         return x
+
+
+
+### Even Smaller Encoder Decoder with Pooling Layers
+class EvenSmallerEncoder(nn.Module):
+    def __init__(self):
+        super(EvenSmallerEncoder, self).__init__()
+        model = [
+            Conv2dBlock(3, 8, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect'),  # 128x128 -> 128x128
+            nn.MaxPool2d(2, 2),  # 128x128 -> 64x64
+            Conv2dBlock(8, 16, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect'),  # 64x64 -> 64x64
+            nn.MaxPool2d(2, 2),  # 64x64 -> 32x32
+            Conv2dBlock(16, 32, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect'),  # 32x32 -> 32x32
+            nn.MaxPool2d(2, 2),  # 32x32 -> 16x16
+            Conv2dBlock(32, 64, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect'),  # 16x16 -> 16x16
+            nn.MaxPool2d(2, 2)  # 16x16 -> 8x8
+        ]
+        self.model = nn.Sequential(*model)
+
+    def forward(self, x):
+        return self.model(x)
+
+class EvenSmallerDecoder(nn.Module):
+    def __init__(self):
+        super(EvenSmallerDecoder, self).__init__()
+        model = [
+            nn.Upsample(scale_factor=2),  # 8x8 -> 16x16
+            Conv2dBlock(64, 32, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect'),
+            nn.Upsample(scale_factor=2),  # 16x16 -> 32x32
+            Conv2dBlock(32, 16, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect'),
+            nn.Upsample(scale_factor=2),  # 32x32 -> 64x64
+            Conv2dBlock(16, 8, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect'),
+            nn.Upsample(scale_factor=2),  # 64x64 -> 128x128
+            Conv2dBlock(8, 3, 3, 1, 1, norm='none', activation='tanh', pad_type='reflect')
+        ]
+        self.model = nn.Sequential(*model)
+
+    def forward(self, x):
+        return self.model(x)
+
+class EvenMuchSmallerEncoder(nn.Module):
+    def __init__(self):
+        super(EvenMuchSmallerEncoder, self).__init__()
+        model = [
+            Conv2dBlock(3, 8, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect'),  # 128x128 -> 128x128
+            nn.MaxPool2d(2, 2),  # 128x128 -> 64x64
+            Conv2dBlock(8, 16, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect'),  # 64x64 -> 64x64
+            nn.MaxPool2d(2, 2),  # 64x64 -> 32x32
+            Conv2dBlock(16, 32, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect'),  # 32x32 -> 32x32
+            nn.MaxPool2d(4, 4),  # 32x32 -> 8x8
+        ]
+        self.model = nn.Sequential(*model)
+
+    def forward(self, x):
+        return self.model(x)
+
+class EvenMuchSmallerDecoder(nn.Module):
+    def __init__(self):
+        super(EvenMuchSmallerDecoder, self).__init__()
+        model = [
+            nn.Upsample(scale_factor=4),  # 8x8 -> 32x32
+            Conv2dBlock(32, 16, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect'),  # 32x32
+            nn.Upsample(scale_factor=2),  # 32x32 -> 64x64
+            Conv2dBlock(16, 8, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect'),  # 64x64
+            nn.Upsample(scale_factor=2),  # 64x64 -> 128x128
+            Conv2dBlock(8, 3, 3, 1, 1, norm='none', activation='tanh', pad_type='reflect')  # 128x128
+        ]
+        self.model = nn.Sequential(*model)
+
+    def forward(self, x):
+        return self.model(x)
 
 
 
