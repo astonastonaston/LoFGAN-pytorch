@@ -6,13 +6,18 @@ from torch import autograd
 from networks.blocks import *
 from networks.loss import *
 from utils import batched_index_select, batched_scatter
+import time
 
+use_generator_sc = True
 
 class LoFGAN(nn.Module):
     def __init__(self, config):
         super(LoFGAN, self).__init__()
 
-        self.gen = Generator(config['gen'])
+        if not use_generator_sc:   
+            self.gen = Generator(config['gen'])
+        else:
+            self.gen = GeneratorWithSC(config['gen'])
         self.dis = Discriminator(config['dis'])
 
         self.w_adv_g = config['w_adv_g']
@@ -48,11 +53,14 @@ class LoFGAN(nn.Module):
         elif mode == 'dis_update':
             xs.requires_grad_()
 
+            advdissttt = time.time()
             _, logit_adv_real, logit_c_real = self.dis(xs)
             loss_adv_dis_real = torch.nn.ReLU()(1.0 - logit_adv_real).mean()
             loss_adv_dis_real = loss_adv_dis_real * self.w_adv_d
             loss_adv_dis_real.backward(retain_graph=True)
+            advdisendt = time.time()
 
+            regdissttt = time.time()
             y_extend = y.repeat(1, self.n_sample).view(-1)
             index = torch.LongTensor(range(y_extend.size(0))).cuda()
             logit_c_real_forgp = logit_c_real[index, y_extend].unsqueeze(1)
@@ -60,11 +68,15 @@ class LoFGAN(nn.Module):
 
             loss_reg_dis = loss_reg_dis * self.w_gp
             loss_reg_dis.backward(retain_graph=True)
+            regdisendt = time.time()
 
+            clsdissttt = time.time()
             loss_cls_dis = F.cross_entropy(logit_c_real, y_extend)
             loss_cls_dis = loss_cls_dis * self.w_cls
             loss_cls_dis.backward()
+            clsdisendt = time.time()
 
+            advdisfksttt = time.time()
             with torch.no_grad():
                 fake_x = self.gen(xs)[0]
 
@@ -72,7 +84,9 @@ class LoFGAN(nn.Module):
             loss_adv_dis_fake = torch.nn.ReLU()(1.0 + logit_adv_fake).mean()
             loss_adv_dis_fake = loss_adv_dis_fake * self.w_adv_d
             loss_adv_dis_fake.backward()
+            advdisfkendt = time.time()
 
+#             print(f"loss time for adv_dis {advdisendt-advdissttt} reg_dis {regdisendt-regdissttt} cls_dis {clsdisendt-clsdissttt} adv_dis_fk {advdisfkendt-advdisfksttt}")
             loss_total = loss_adv_dis_real + loss_adv_dis_fake + loss_cls_dis
             return {'loss_total': loss_total,
                     'loss_adv_dis': loss_adv_dis_fake + loss_adv_dis_real,
@@ -144,19 +158,167 @@ class Discriminator(nn.Module):
         else:
             B, C, H, W = x.size()
             K = 1
+        featst = time.time()
         feat = self.cnn_f(x)
+        feated = time.time()
+        logit_advst = time.time()
         logit_adv = self.cnn_adv(feat).view(B * K, -1)
+        logit_adved = time.time()
+        logit_cst = time.time()
         logit_c = self.cnn_c(feat).view(B * K, -1)
+        logit_ced = time.time()
+#         print(f"dis f time {feated-featst} adv time {logit_adved-logit_advst} c time {logit_ced-logit_cst}")
         return feat, logit_adv, logit_c
 
 
+
+class GeneratorWithSC(nn.Module):
+    def __init__(self, config):
+        super(GeneratorWithSC, self).__init__()
+        self.encoder = SmallerEncoderWithSC()
+        self.decoder = SmallerDecoderWithSC()
+        self.fusion = LocalFusionModule(inplanes=64, rate=config['rate'])
+
+#     def forward(self, xs):
+#         b, k, C, H, W = xs.size()
+#         xs = xs.view(-1, C, H, W)
+#         x1, x2, x3, x4, querys = self.encoder(xs)
+#         c, h, w = querys.size()[-3:]
+#         querys = querys.view(b, k, c, h, w)
+
+#         similarity_total = torch.cat([torch.rand(b, 1) for _ in range(k)], dim=1).cuda()  # b*k
+#         similarity_sum = torch.sum(similarity_total, dim=1, keepdim=True).expand(b, k)  # b*k
+#         similarity = similarity_total / similarity_sum  # b*k
+
+#         base_index = random.choice(range(k))
+
+#         base_feat = querys[:, base_index, :, :, :]
+#         feat_gen, indices_feat, indices_ref = self.fusion(base_feat, querys, base_index, similarity)
+
+#         fake_x = self.decoder([x1, x2, x3, x4, feat_gen])
+
+#         return fake_x, similarity, indices_feat, indices_ref, base_index
+    def forward(self, xs):
+        b, k, C, H, W = xs.size()
+        xs = xs.view(-1, C, H, W)
+        querys = self.encoder(xs)
+        c, h, w = querys[-1].size()[-3:]
+#         for j in querys:
+#             print(j.size())
+        queryswh = [q.size()[-2:] for q in querys]
+        querys = [q.view(b, k, -1, h, w) for q in querys]
+#         print("after view")
+#         for j in querys:
+#             print(j.size())
+
+        similarity_total = torch.cat([torch.rand(b, 1) for _ in range(k)], dim=1).cuda()  # b*k
+        similarity_sum = torch.sum(similarity_total, dim=1, keepdim=True).expand(b, k)  # b*k
+        similarity = similarity_total / similarity_sum  # b*k
+
+        base_index = random.choice(range(k))
+
+        base_feat = querys[-1][:, base_index, :, :, :]
+        feat_gen, indices_feat, indices_ref = self.fusion(base_feat, querys[-1], base_index, similarity)
+
+        # choose the skip-connection feature to be the base feature correspondance
+        skip_feats = [q[:, base_index, :, :, :] for q in querys[:-1]]
+        # reshape the size of the skip features to match the input w,h dimensions
+        b2, _, _, _ = skip_feats[0].size()
+        skip_feats = [skip_feats[j].view(b2, -1, queryswh[j][0], queryswh[j][1]) for j in range(len(skip_feats))]
+#         print("skip_feats")
+#         for j in skip_feats:
+#             print(j.size())
+#         print(feat_gen.shape)
+        fake_x = self.decoder([*skip_feats, feat_gen])
+
+        return fake_x, similarity, indices_feat, indices_ref, base_index
+
+class SmallerEncoderWithSC(nn.Module):
+    def __init__(self):
+        super(SmallerEncoderWithSC, self).__init__()
+
+        self.layer1 = Conv2dBlock(3, 8, 5, 1, 2, norm='bn', activation='lrelu', pad_type='reflect')
+        self.layer2 = Conv2dBlock(8, 16, 3, 2, 1, norm='bn', activation='lrelu', pad_type='reflect')
+        self.layer3 = Conv2dBlock(16, 32, 3, 2, 1, norm='bn', activation='lrelu', pad_type='reflect')
+        self.layer4 = Conv2dBlock(32, 64, 3, 2, 1, norm='bn', activation='lrelu', pad_type='reflect')
+        self.layer5 = Conv2dBlock(64, 64, 3, 2, 1, norm='bn', activation='lrelu', pad_type='reflect')
+
+    def forward(self, x):
+        x1 = self.layer1(x)
+        x2 = self.layer2(x1)
+        x3 = self.layer3(x2)
+        x4 = self.layer4(x3)
+        x5 = self.layer5(x4)
+        return [x1, x2, x3, x4, x5]
+
+class SmallerDecoderWithSC(nn.Module):
+    def __init__(self):
+        super(SmallerDecoderWithSC, self).__init__()
+
+        self.upsample1 = nn.Upsample(scale_factor=2)
+        self.conv1 = Conv2dBlock(128, 64, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect')  # Concatenate with x4
+        
+        self.upsample2 = nn.Upsample(scale_factor=2)
+        self.conv2 = Conv2dBlock(128, 32, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect')  # Concatenate with x3
+        
+        self.upsample3 = nn.Upsample(scale_factor=2)
+        self.conv3 = Conv2dBlock(64, 16, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect')   # Concatenate with x2
+        
+        self.upsample4 = nn.Upsample(scale_factor=2)
+        self.conv4 = Conv2dBlock(32, 8, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect')   # Concatenate with x1
+        
+        self.conv5 = Conv2dBlock(8, 3, 5, 1, 2, norm='none', activation='tanh', pad_type='reflect')
+        
+        # match skip channels by 1*1 convolution (since skip-connections are done after up-sampling)
+        self.skipconv1 = Conv2dBlock(64, 64, 1, 1, norm='bn', activation='lrelu', pad_type='reflect')
+        self.skipconv2 = Conv2dBlock(32, 64, 1, 1, norm='bn', activation='lrelu', pad_type='reflect')
+        self.skipconv3 = Conv2dBlock(16, 32, 1, 1, norm='bn', activation='lrelu', pad_type='reflect')
+        self.skipconv4 = Conv2dBlock(8, 16, 1, 1, norm='bn', activation='lrelu', pad_type='reflect')
+        
+
+    def forward(self, xs):
+        x1, x2, x3, x4, x5 = xs # note that initially x1-x4 are not reshaped
+
+        x = self.upsample1(x5)
+#         print(f"{x.shape}, {x4.shape}")
+        # reshape skip features since they're connected after 2-times up-sampling
+        x4 = self.skipconv1(x4)
+        x = torch.cat([x, x4], dim=1)
+        x = self.conv1(x)
+        
+        x = self.upsample2(x)
+#         print(f"{x.shape}, {x3.shape}")
+#         x3 = x3.view(x.size())
+        x3 = self.skipconv2(x3)
+        x = torch.cat([x, x3], dim=1)
+        x = self.conv2(x)
+        
+        x = self.upsample3(x)
+#         print(f"{x.shape}, {x2.shape}")
+#         x2 = x2.view(x.size())
+        x2 = self.skipconv3(x2) 
+        x = torch.cat([x, x2], dim=1)
+        x = self.conv3(x)
+        
+        x = self.upsample4(x)
+#         print(f"{x.shape}, {x1.shape}")
+#         x1 = x1.view(x.size())
+        x1 = self.skipconv4(x1)
+        x = torch.cat([x, x1], dim=1)
+        x = self.conv4(x)
+        
+        x = self.conv5(x)
+        return x
+
+
+    
 class Generator(nn.Module):
     def __init__(self, config):
         super(Generator, self).__init__()
-        self.encoder = Encoder()
-        self.decoder = Decoder()
-        # self.encoder = SmallerEncoder()
-        # self.decoder = SmallerDecoder()
+#         self.encoder = Encoder()
+#         self.decoder = Decoder()
+        self.encoder = SmallerEncoder()
+        self.decoder = SmallerDecoder()
 #         self.encoder = EvenSmallerEncoder()
 #         self.decoder = EvenSmallerDecoder()
 #         self.encoder = EvenMuchSmallerEncoder()
@@ -249,6 +411,9 @@ class Decoder(nn.Module):
         return self.model(x)
 
 
+
+
+
 class SmallerEncoder(nn.Module):
     def __init__(self):
         super(SmallerEncoder, self).__init__()
@@ -300,8 +465,6 @@ class SmallerDecoder(nn.Module):
         
         x = self.conv5(x)
         return x
-
-
 
 ### Even Smaller Encoder Decoder with Pooling Layers
 class EvenSmallerEncoder(nn.Module):
