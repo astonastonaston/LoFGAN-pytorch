@@ -8,7 +8,10 @@ from networks.loss import *
 from utils import batched_index_select, batched_scatter
 import time
 
-use_generator_sc = True
+use_generator_sc = False # whether or not use skip connection (sc) for generator
+use_attention = False # only effective if using generator with sc
+use_skip_index = False # unused yet
+
 
 class LoFGAN(nn.Module):
     def __init__(self, config):
@@ -115,7 +118,6 @@ class LoFGAN(nn.Module):
         reg /= batch_size
         return reg
 
-
 class Discriminator(nn.Module):
     def __init__(self, config):
         super(Discriminator, self).__init__()
@@ -172,6 +174,32 @@ class Discriminator(nn.Module):
 
 
 
+class SelfAttention(nn.Module):
+    def __init__(self, in_dim):
+        super(SelfAttention, self).__init__()
+        self.chanel_in = in_dim
+        
+        self.query_conv = nn.Conv2d(in_channels=in_dim, out_channels=in_dim // 8, kernel_size=1)
+        self.key_conv = nn.Conv2d(in_channels=in_dim, out_channels=in_dim // 8, kernel_size=1)
+        self.value_conv = nn.Conv2d(in_channels=in_dim, out_channels=in_dim, kernel_size=1)
+        self.gamma = nn.Parameter(torch.zeros(1))
+
+        self.softmax = nn.Softmax(dim=-1)
+
+    def forward(self, x):
+        m_batchsize, C, width, height = x.size()
+        proj_query = self.query_conv(x).view(m_batchsize, -1, width * height).permute(0, 2, 1)
+        proj_key = self.key_conv(x).view(m_batchsize, -1, width * height)
+        energy = torch.bmm(proj_query, proj_key)
+        attention = self.softmax(energy)
+        proj_value = self.value_conv(x).view(m_batchsize, -1, width * height)
+        
+        out = torch.bmm(proj_value, attention.permute(0, 2, 1))
+        out = out.view(m_batchsize, C, width, height)
+        
+        out = self.gamma * out + x
+        return out, attention
+
 class GeneratorWithSC(nn.Module):
     def __init__(self, config):
         super(GeneratorWithSC, self).__init__()
@@ -216,12 +244,16 @@ class GeneratorWithSC(nn.Module):
         similarity = similarity_total / similarity_sum  # b*k
 
         base_index = random.choice(range(k))
+        skip_index = random.choice(range(k))
 
         base_feat = querys[-1][:, base_index, :, :, :]
         feat_gen, indices_feat, indices_ref = self.fusion(base_feat, querys[-1], base_index, similarity)
 
         # choose the skip-connection feature to be the base feature correspondance
-        skip_feats = [q[:, base_index, :, :, :] for q in querys[:-1]]
+        if not use_skip_index:
+            skip_feats = [q[:, base_index, :, :, :] for q in querys[:-1]]
+        else:
+            skip_feats = [q[:, skip_index, :, :, :] for q in querys[:-1]]
         # reshape the size of the skip features to match the input w,h dimensions
         b2, _, _, _ = skip_feats[0].size()
         skip_feats = [skip_feats[j].view(b2, -1, queryswh[j][0], queryswh[j][1]) for j in range(len(skip_feats))]
@@ -240,6 +272,9 @@ class SmallerEncoderWithSC(nn.Module):
         self.layer1 = Conv2dBlock(3, 8, 5, 1, 2, norm='bn', activation='lrelu', pad_type='reflect')
         self.layer2 = Conv2dBlock(8, 16, 3, 2, 1, norm='bn', activation='lrelu', pad_type='reflect')
         self.layer3 = Conv2dBlock(16, 32, 3, 2, 1, norm='bn', activation='lrelu', pad_type='reflect')
+        if use_attention:
+            self.att1 = SelfAttention(32)
+            self.att2 = SelfAttention(64)
         self.layer4 = Conv2dBlock(32, 64, 3, 2, 1, norm='bn', activation='lrelu', pad_type='reflect')
         self.layer5 = Conv2dBlock(64, 64, 3, 2, 1, norm='bn', activation='lrelu', pad_type='reflect')
 
@@ -247,7 +282,11 @@ class SmallerEncoderWithSC(nn.Module):
         x1 = self.layer1(x)
         x2 = self.layer2(x1)
         x3 = self.layer3(x2)
+        if use_attention:
+            x3, _ = self.att1(x3)
         x4 = self.layer4(x3)
+        if use_attention:
+            x4, _ = self.att2(x4)
         x5 = self.layer5(x4)
         return [x1, x2, x3, x4, x5]
 
@@ -258,22 +297,28 @@ class SmallerDecoderWithSC(nn.Module):
         self.upsample1 = nn.Upsample(scale_factor=2)
         self.conv1 = Conv2dBlock(128, 64, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect')  # Concatenate with x4
         
+        if use_attention:
+            self.att1 = SelfAttention(64)
+            self.att2 = SelfAttention(32)
+        
         self.upsample2 = nn.Upsample(scale_factor=2)
         self.conv2 = Conv2dBlock(128, 32, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect')  # Concatenate with x3
         
         self.upsample3 = nn.Upsample(scale_factor=2)
-        self.conv3 = Conv2dBlock(64, 16, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect')   # Concatenate with x2
+        self.conv3 = Conv2dBlock(32, 16, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect')   # Concatenate with x2
+#         self.conv3 = Conv2dBlock(64, 16, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect')   # Concatenate with x2
         
         self.upsample4 = nn.Upsample(scale_factor=2)
-        self.conv4 = Conv2dBlock(32, 8, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect')   # Concatenate with x1
+#         self.conv4 = Conv2dBlock(32, 8, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect')   # Concatenate with x1
+        self.conv4 = Conv2dBlock(16, 8, 3, 1, 1, norm='bn', activation='lrelu', pad_type='reflect')   # Concatenate with x1
         
         self.conv5 = Conv2dBlock(8, 3, 5, 1, 2, norm='none', activation='tanh', pad_type='reflect')
         
         # match skip channels by 1*1 convolution (since skip-connections are done after up-sampling)
         self.skipconv1 = Conv2dBlock(64, 64, 1, 1, norm='bn', activation='lrelu', pad_type='reflect')
         self.skipconv2 = Conv2dBlock(32, 64, 1, 1, norm='bn', activation='lrelu', pad_type='reflect')
-        self.skipconv3 = Conv2dBlock(16, 32, 1, 1, norm='bn', activation='lrelu', pad_type='reflect')
-        self.skipconv4 = Conv2dBlock(8, 16, 1, 1, norm='bn', activation='lrelu', pad_type='reflect')
+#         self.skipconv3 = Conv2dBlock(16, 32, 1, 1, norm='bn', activation='lrelu', pad_type='reflect')
+#         self.skipconv4 = Conv2dBlock(8, 16, 1, 1, norm='bn', activation='lrelu', pad_type='reflect')
         
 
     def forward(self, xs):
@@ -285,6 +330,8 @@ class SmallerDecoderWithSC(nn.Module):
         x4 = self.skipconv1(x4)
         x = torch.cat([x, x4], dim=1)
         x = self.conv1(x)
+        if use_attention:
+            x, _ = self.att1(x) 
         
         x = self.upsample2(x)
 #         print(f"{x.shape}, {x3.shape}")
@@ -292,19 +339,19 @@ class SmallerDecoderWithSC(nn.Module):
         x3 = self.skipconv2(x3)
         x = torch.cat([x, x3], dim=1)
         x = self.conv2(x)
+        if use_attention:
+            x, _ = self.att2(x) 
         
         x = self.upsample3(x)
 #         print(f"{x.shape}, {x2.shape}")
-#         x2 = x2.view(x.size())
-        x2 = self.skipconv3(x2) 
-        x = torch.cat([x, x2], dim=1)
+#         x2 = self.skipconv3(x2) 
+#         x = torch.cat([x, x2], dim=1)
         x = self.conv3(x)
         
         x = self.upsample4(x)
 #         print(f"{x.shape}, {x1.shape}")
-#         x1 = x1.view(x.size())
-        x1 = self.skipconv4(x1)
-        x = torch.cat([x, x1], dim=1)
+#         x1 = self.skipconv4(x1)
+#         x = torch.cat([x, x1], dim=1)
         x = self.conv4(x)
         
         x = self.conv5(x)

@@ -27,7 +27,8 @@ gen:
 dis:
   nf: 64
   # n_res_blks: 4
-  n_res_blks: 2
+  # n_res_blks: 2
+  n_res_blks: 3
   num_classes: 5
 
 # data options
